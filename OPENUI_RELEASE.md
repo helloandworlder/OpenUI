@@ -6,13 +6,8 @@ tag is pushed.
 ## Release assets
 
 - `open-ui-linux-amd64.tar.gz`
-- `open-ui-linux-arm64.tar.gz`
-- `open-ui-linux-armv7.tar.gz`
-- `open-ui-linux-armv6.tar.gz`
-- `open-ui-linux-armv5.tar.gz`
-- `open-ui-linux-386.tar.gz`
-- `open-ui-linux-s390x.tar.gz`
-- `open-ui-windows-amd64.zip`
+
+Only Linux amd64 is built and published.
 
 Linux archives contain an `open-ui/` directory with:
 
@@ -31,7 +26,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/helloandworlder/OpenUI/main/in
 Install a specific tag:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/helloandworlder/OpenUI/main/install.sh) v3.0.2
+bash <(curl -Ls https://raw.githubusercontent.com/helloandworlder/OpenUI/main/install.sh) v3.0.3
 ```
 
 If the GitHub repository name changes, override it without editing the script:

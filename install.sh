@@ -30,13 +30,7 @@ fi
 arch() {
     case "$(uname -m)" in
         x86_64 | x64 | amd64) echo 'amd64' ;;
-        i*86 | x86) echo '386' ;;
-        armv8* | armv8 | arm64 | aarch64) echo 'arm64' ;;
-        armv7* | armv7 | arm) echo 'armv7' ;;
-        armv6* | armv6) echo 'armv6' ;;
-        armv5* | armv5) echo 'armv5' ;;
-        s390x) echo 's390x' ;;
-        *) echo -e "${red}Unsupported CPU architecture: $(uname -m)${plain}" && exit 1 ;;
+        *) echo -e "${red}Unsupported CPU architecture: $(uname -m). OpenUI release currently supports linux-amd64 only.${plain}" >&2 && exit 1 ;;
     esac
 }
 
@@ -87,7 +81,7 @@ download_release() {
     local asset="open-ui-linux-${platform}.tar.gz"
     local url="https://github.com/${OPENUI_REPO}/releases/download/${version}/${asset}"
 
-    echo -e "${green}Downloading OpenUI ${version} for linux-${platform}...${plain}"
+    echo -e "${green}Downloading OpenUI ${version} for linux-${platform}...${plain}" >&2
     curl -fL --retry 3 --retry-delay 2 -o "/tmp/${asset}" "${url}"
     echo "/tmp/${asset}"
 }
