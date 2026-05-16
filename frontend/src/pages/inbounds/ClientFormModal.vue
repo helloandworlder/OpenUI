@@ -47,6 +47,8 @@ const clientStats = ref(null);
 
 const saving = ref(false);
 const delayedStart = ref(false);
+const uplinkUnit = ref('Kbps');
+const downlinkUnit = ref('Kbps');
 
 const SECURITY_OPTIONS = Object.values(USERS_SECURITY);
 const FLOW_OPTIONS = Object.values(TLS_FLOW_CONTROL);
@@ -57,6 +59,9 @@ const isVmessOrVless = computed(() =>
 );
 const isTrojanOrSS = computed(() =>
   protocol.value === Protocols.TROJAN || protocol.value === Protocols.SHADOWSOCKS,
+);
+const isHttpAccountProtocol = computed(() =>
+  protocol.value === Protocols.HTTP || protocol.value === Protocols.MIXED,
 );
 
 const expiryDate = computed({
@@ -86,6 +91,27 @@ const totalGB = computed({
   },
 });
 
+function rateUnitMultiplier(unit) {
+  return unit === 'Mbps' ? 1024 * 1024 : 1024;
+}
+
+function rateLimitBridge(key, unitRef) {
+  return computed({
+    get: () => {
+      const raw = client.value?.[key] || 0;
+      return Math.round((raw / rateUnitMultiplier(unitRef.value)) * 100) / 100;
+    },
+    set: (next) => {
+      if (!client.value) return;
+      const n = Number(next) || 0;
+      client.value[key] = Math.round(n * rateUnitMultiplier(unitRef.value));
+    },
+  });
+}
+
+const uplinkLimitInput = rateLimitBridge('uplinkLimitBps', uplinkUnit);
+const downlinkLimitInput = rateLimitBridge('downlinkLimitBps', downlinkUnit);
+
 const isExpired = computed(() => {
   if (props.mode !== 'edit' || !client.value) return false;
   return client.value.expiryTime > 0 && client.value.expiryTime < Date.now();
@@ -100,6 +126,8 @@ function getClientId(proto, c) {
     case Protocols.TROJAN: return c.password;
     case Protocols.SHADOWSOCKS: return c.email;
     case Protocols.HYSTERIA: return c.auth;
+    case Protocols.MIXED:
+    case Protocols.HTTP: return c.email;
     default: return c.id;
   }
 }
@@ -117,6 +145,8 @@ function makeNewClient(proto, parsed) {
       );
     }
     case Protocols.HYSTERIA: return new Inbound.HysteriaSettings.Hysteria();
+    case Protocols.MIXED: return new Inbound.MixedSettings.SocksAccount();
+    case Protocols.HTTP: return new Inbound.HttpSettings.HttpAccount();
     default: return null;
   }
 }
@@ -164,6 +194,12 @@ function randomPassword() {
   } else {
     client.value.password = RandomUtil.randomSeq(10);
   }
+}
+function randomUser() {
+  if (client.value) client.value.user = RandomUtil.randomSeq(10);
+}
+function randomPass() {
+  if (client.value) client.value.pass = RandomUtil.randomSeq(10);
 }
 function randomAuth() {
   if (client.value) client.value.auth = RandomUtil.randomSeq(10);
@@ -280,6 +316,22 @@ const title = computed(() =>
         <a-input v-model:value="client.id" />
       </a-form-item>
 
+      <a-form-item v-if="isHttpAccountProtocol">
+        <template #label>
+          {{ t('username') }}
+          <SyncOutlined class="random-icon" @click="randomUser" />
+        </template>
+        <a-input v-model:value="client.user" />
+      </a-form-item>
+
+      <a-form-item v-if="isHttpAccountProtocol">
+        <template #label>
+          {{ t('password') }}
+          <SyncOutlined class="random-icon" @click="randomPass" />
+        </template>
+        <a-input v-model:value="client.pass" />
+      </a-form-item>
+
       <a-form-item v-if="protocol === Protocols.VMESS" :label="t('security')">
         <a-select v-model:value="client.security">
           <a-select-option v-for="key in SECURITY_OPTIONS" :key="key" :value="key">
@@ -373,6 +425,30 @@ const title = computed(() =>
           <a-tooltip :title="t('pages.client.renewDesc')">{{ t('pages.client.renew') }}</a-tooltip>
         </template>
         <a-input-number v-model:value="client.reset" :min="0" />
+      </a-form-item>
+
+      <a-form-item label="Uplink limit">
+        <a-input-group compact>
+          <a-input-number v-model:value="uplinkLimitInput" :min="0" :style="{ width: '65%' }" />
+          <a-select v-model:value="uplinkUnit" :style="{ width: '35%' }">
+            <a-select-option value="Kbps">Kbps</a-select-option>
+            <a-select-option value="Mbps">Mbps</a-select-option>
+          </a-select>
+        </a-input-group>
+      </a-form-item>
+
+      <a-form-item label="Downlink limit">
+        <a-input-group compact>
+          <a-input-number v-model:value="downlinkLimitInput" :min="0" :style="{ width: '65%' }" />
+          <a-select v-model:value="downlinkUnit" :style="{ width: '35%' }">
+            <a-select-option value="Kbps">Kbps</a-select-option>
+            <a-select-option value="Mbps">Mbps</a-select-option>
+          </a-select>
+        </a-input-group>
+      </a-form-item>
+
+      <a-form-item label="Max connections">
+        <a-input-number v-model:value="client.maxConnections" :min="0" />
       </a-form-item>
     </a-form>
   </a-modal>

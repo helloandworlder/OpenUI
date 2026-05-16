@@ -155,17 +155,140 @@ func (s *InboundService) GetInboundsByTrafficReset(period string) ([]*model.Inbo
 }
 
 func (s *InboundService) GetClients(inbound *model.Inbound) ([]model.Client, error) {
-	settings := map[string][]model.Client{}
+	settings := map[string]json.RawMessage{}
 	json.Unmarshal([]byte(inbound.Settings), &settings)
 	if settings == nil {
 		return nil, fmt.Errorf("setting is null")
 	}
+	if inbound.Protocol == model.Mixed {
+		var mixedSettings map[string]any
+		if err := json.Unmarshal([]byte(inbound.Settings), &mixedSettings); err == nil && mixedSettings["auth"] != "password" {
+			return nil, nil
+		}
+	}
 
-	clients := settings["clients"]
-	if clients == nil {
+	rawClients := settings["clients"]
+	if len(rawClients) == 0 && (inbound.Protocol == model.Mixed || inbound.Protocol == model.HTTP) {
+		rawClients = settings["accounts"]
+	}
+	if len(rawClients) == 0 {
 		return nil, nil
 	}
+	var clients []model.Client
+	if err := json.Unmarshal(rawClients, &clients); err != nil {
+		return nil, err
+	}
+	if inbound.Protocol == model.Mixed || inbound.Protocol == model.HTTP {
+		for i := range clients {
+			if clients[i].Email == "" {
+				clients[i].Email = clients[i].User
+			}
+		}
+	}
 	return clients, nil
+}
+
+func normalizeAccountClients(protocol model.Protocol, settings map[string]any) {
+	if protocol != model.Mixed && protocol != model.HTTP {
+		return
+	}
+	raw, ok := settings["clients"]
+	if !ok {
+		raw = settings["accounts"]
+	}
+	accounts, ok := raw.([]any)
+	if !ok {
+		return
+	}
+	now := time.Now().Unix() * 1000
+	for i := range accounts {
+		account, ok := accounts[i].(map[string]any)
+		if !ok {
+			continue
+		}
+		if account["email"] == nil || account["email"] == "" {
+			account["email"] = account["user"]
+		}
+		if account["enable"] == nil {
+			account["enable"] = true
+		}
+		switch v := account["tgId"].(type) {
+		case nil:
+			account["tgId"] = int64(0)
+		case string:
+			if v == "" {
+				account["tgId"] = int64(0)
+			} else if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+				account["tgId"] = n
+			}
+		case float64:
+			account["tgId"] = int64(v)
+		}
+		if account["created_at"] == nil {
+			account["created_at"] = now
+		}
+		account["updated_at"] = now
+		accounts[i] = account
+	}
+	settings["clients"] = accounts
+	delete(settings, "accounts")
+}
+
+func normalizeInboundSettingsAccounts(protocol model.Protocol, settings map[string]any) {
+	normalizeAccountClients(protocol, settings)
+}
+
+func protocolClientIDField(protocol model.Protocol) string {
+	switch protocol {
+	case model.Trojan:
+		return "password"
+	case model.Shadowsocks:
+		return "email"
+	case model.Hysteria, model.Hysteria2:
+		return "auth"
+	case model.Mixed, model.HTTP:
+		return "email"
+	default:
+		return "id"
+	}
+}
+
+func ensureClientIdentity(protocol model.Protocol, client model.Client) error {
+	if strings.TrimSpace(client.Email) == "" {
+		return common.NewError("client email is required")
+	}
+	switch protocol {
+	case model.Trojan:
+		if client.Password == "" {
+			return common.NewError("empty client ID")
+		}
+	case model.Shadowsocks, model.Mixed, model.HTTP:
+		if client.Email == "" {
+			return common.NewError("empty client ID")
+		}
+	case model.Hysteria, model.Hysteria2:
+		if client.Auth == "" {
+			return common.NewError("empty client ID")
+		}
+	default:
+		if client.ID == "" {
+			return common.NewError("empty client ID")
+		}
+	}
+	return nil
+}
+
+func clientPrimaryID(protocol model.Protocol, client model.Client) string {
+	switch protocolClientIDField(protocol) {
+	case "password":
+		return client.Password
+	case "auth":
+		return client.Auth
+	case "email":
+		return client.Email
+	default:
+		return client.ID
+	}
 }
 
 func (s *InboundService) getAllEmails() ([]string, error) {
@@ -312,6 +435,7 @@ func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, boo
 	if len(clients) > 0 {
 		var settings map[string]any
 		if err2 := json.Unmarshal([]byte(inbound.Settings), &settings); err2 == nil && settings != nil {
+			normalizeAccountClients(inbound.Protocol, settings)
 			now := time.Now().Unix() * 1000
 			updatedClients := make([]model.Client, 0, len(clients))
 			for _, c := range clients {
@@ -322,6 +446,7 @@ func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, boo
 				updatedClients = append(updatedClients, c)
 			}
 			settings["clients"] = updatedClients
+			normalizeAccountClients(inbound.Protocol, settings)
 			if bs, err3 := json.MarshalIndent(settings, "", "  "); err3 == nil {
 				inbound.Settings = string(bs)
 			} else {
@@ -334,23 +459,8 @@ func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, boo
 
 	// Secure client ID
 	for _, client := range clients {
-		switch inbound.Protocol {
-		case "trojan":
-			if client.Password == "" {
-				return inbound, false, common.NewError("empty client ID")
-			}
-		case "shadowsocks":
-			if client.Email == "" {
-				return inbound, false, common.NewError("empty client ID")
-			}
-		case "hysteria", "hysteria2":
-			if client.Auth == "" {
-				return inbound, false, common.NewError("empty client ID")
-			}
-		default:
-			if client.ID == "" {
-				return inbound, false, common.NewError("empty client ID")
-			}
+		if err := ensureClientIdentity(inbound.Protocol, client); err != nil {
+			return inbound, false, err
 		}
 	}
 
@@ -822,6 +932,12 @@ func (s *InboundService) AddInboundClient(data *model.Inbound) (bool, error) {
 		return false, err
 	}
 
+	oldInbound, err := s.GetInbound(data.Id)
+	if err != nil {
+		return false, err
+	}
+	normalizeAccountClients(oldInbound.Protocol, settings)
+
 	interfaceClients := settings["clients"].([]any)
 	// Add timestamps for new clients being appended
 	nowTs := time.Now().Unix() * 1000
@@ -842,33 +958,10 @@ func (s *InboundService) AddInboundClient(data *model.Inbound) (bool, error) {
 		return false, common.NewError("Duplicate email:", existEmail)
 	}
 
-	oldInbound, err := s.GetInbound(data.Id)
-	if err != nil {
-		return false, err
-	}
-
 	// Secure client ID
 	for _, client := range clients {
-		if strings.TrimSpace(client.Email) == "" {
-			return false, common.NewError("client email is required")
-		}
-		switch oldInbound.Protocol {
-		case "trojan":
-			if client.Password == "" {
-				return false, common.NewError("empty client ID")
-			}
-		case "shadowsocks":
-			if client.Email == "" {
-				return false, common.NewError("empty client ID")
-			}
-		case "hysteria", "hysteria2":
-			if client.Auth == "" {
-				return false, common.NewError("empty client ID")
-			}
-		default:
-			if client.ID == "" {
-				return false, common.NewError("empty client ID")
-			}
+		if err := ensureClientIdentity(oldInbound.Protocol, client); err != nil {
+			return false, err
 		}
 	}
 
@@ -877,11 +970,13 @@ func (s *InboundService) AddInboundClient(data *model.Inbound) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	normalizeAccountClients(oldInbound.Protocol, oldSettings)
 
 	oldClients := oldSettings["clients"].([]any)
 	oldClients = append(oldClients, interfaceClients...)
 
 	oldSettings["clients"] = oldClients
+	normalizeAccountClients(oldInbound.Protocol, oldSettings)
 
 	newSettings, err := json.MarshalIndent(oldSettings, "", "  ")
 	if err != nil {
@@ -1161,17 +1256,10 @@ func (s *InboundService) DelInboundClient(inboundId int, clientId string) (bool,
 	if err != nil {
 		return false, err
 	}
+	normalizeAccountClients(oldInbound.Protocol, settings)
 
 	email := ""
-	client_key := "id"
-	switch oldInbound.Protocol {
-	case "trojan":
-		client_key = "password"
-	case "shadowsocks":
-		client_key = "email"
-	case "hysteria", "hysteria2":
-		client_key = "auth"
-	}
+	client_key := protocolClientIDField(oldInbound.Protocol)
 
 	interfaceClients := settings["clients"].([]any)
 	var newClients []any
@@ -1278,12 +1366,13 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 		return false, err
 	}
 
-	interfaceClients := settings["clients"].([]any)
-
 	oldInbound, err := s.GetInbound(data.Id)
 	if err != nil {
 		return false, err
 	}
+	normalizeAccountClients(oldInbound.Protocol, settings)
+
+	interfaceClients := settings["clients"].([]any)
 
 	oldClients, err := s.GetClients(oldInbound)
 	if err != nil {
@@ -1291,24 +1380,9 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 	}
 
 	oldEmail := ""
-	newClientId := ""
 	clientIndex := -1
 	for index, oldClient := range oldClients {
-		oldClientId := ""
-		switch oldInbound.Protocol {
-		case "trojan":
-			oldClientId = oldClient.Password
-			newClientId = clients[0].Password
-		case "shadowsocks":
-			oldClientId = oldClient.Email
-			newClientId = clients[0].Email
-		case "hysteria", "hysteria2":
-			oldClientId = oldClient.Auth
-			newClientId = clients[0].Auth
-		default:
-			oldClientId = oldClient.ID
-			newClientId = clients[0].ID
-		}
+		oldClientId := clientPrimaryID(oldInbound.Protocol, oldClient)
 		if clientId == oldClientId {
 			oldEmail = oldClient.Email
 			clientIndex = index
@@ -1317,11 +1391,11 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 	}
 
 	// Validate new client ID
-	if newClientId == "" || clientIndex == -1 {
+	if clientIndex == -1 {
 		return false, common.NewError("empty client ID")
 	}
-	if strings.TrimSpace(clients[0].Email) == "" {
-		return false, common.NewError("client email is required")
+	if err := ensureClientIdentity(oldInbound.Protocol, clients[0]); err != nil {
+		return false, err
 	}
 
 	if clients[0].Email != oldEmail {
@@ -1339,6 +1413,7 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 	if err != nil {
 		return false, err
 	}
+	normalizeAccountClients(oldInbound.Protocol, oldSettings)
 	settingsClients := oldSettings["clients"].([]any)
 	// Preserve created_at and set updated_at for the replacing client
 	var preservedCreated any
@@ -1383,6 +1458,7 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 			delete(oldSettings, "testseed")
 		}
 	}
+	normalizeInboundSettingsAccounts(oldInbound.Protocol, oldSettings)
 
 	newSettings, err := json.MarshalIndent(oldSettings, "", "  ")
 	if err != nil {
@@ -1468,7 +1544,7 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 				return false, err
 			}
 			needRestart = true
-		} else if oldInbound.NodeID == nil {
+		} else if oldInbound.NodeID == nil && oldInbound.Protocol != model.Mixed && oldInbound.Protocol != model.HTTP {
 			if oldClients[clientIndex].Enable {
 				err1 := rt.RemoveUser(context.Background(), oldInbound, oldEmail)
 				if err1 == nil {

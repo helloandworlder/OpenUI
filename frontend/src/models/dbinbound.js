@@ -162,6 +162,10 @@ export class DBInbound {
                 return true;
             case Protocols.SHADOWSOCKS:
                 return this.toInbound().isSSMultiUser;
+            case Protocols.HTTP:
+                return true;
+            case Protocols.MIXED:
+                return this.toInbound().settings?.auth === 'password';
             default:
                 return false;
         }
@@ -174,7 +178,10 @@ export class DBInbound {
             case Protocols.TROJAN:
             case Protocols.SHADOWSOCKS:
             case Protocols.HYSTERIA:
+            case Protocols.HTTP:
                 return true;
+            case Protocols.MIXED:
+                return this.toInbound().settings?.auth === 'password';
             default:
                 return false;
         }

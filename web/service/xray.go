@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/mhsanaei/3x-ui/v3/database/model"
 	"github.com/mhsanaei/3x-ui/v3/logger"
 	"github.com/mhsanaei/3x-ui/v3/xray"
 
@@ -149,6 +150,14 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 					continue
 				}
 
+				if inbound.Protocol == model.Mixed || inbound.Protocol == model.HTTP {
+					if c["email"] == nil || c["email"] == "" {
+						c["email"] = c["user"]
+					}
+					final_clients = append(final_clients, any(c))
+					continue
+				}
+
 				// clear client config for additional parameters
 				for key := range c {
 					if key != "email" && key != "id" && key != "password" && key != "flow" && key != "method" && key != "auth" && key != "reverse" {
@@ -162,6 +171,9 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 			}
 
 			settings["clients"] = final_clients
+			if inbound.Protocol == model.Mixed || inbound.Protocol == model.HTTP {
+				settings["accounts"] = final_clients
+			}
 			modifiedSettings, err := json.MarshalIndent(settings, "", "  ")
 			if err != nil {
 				return nil, err

@@ -140,9 +140,11 @@ function projectInbound(dbInbound, predicate) {
   } catch (_e) {
     settings = {};
   }
-  if (!Array.isArray(settings.clients)) return next;
-  const filtered = settings.clients.filter(predicate);
-  next.settings = Inbound.Settings.fromJson(dbInbound.protocol, { clients: filtered });
+  const rawClients = Array.isArray(settings.clients) ? settings.clients : settings.accounts;
+  if (!Array.isArray(rawClients)) return next;
+  const filtered = rawClients.filter(predicate);
+  const key = Array.isArray(settings.clients) ? 'clients' : 'accounts';
+  next.settings = Inbound.Settings.fromJson(dbInbound.protocol, { ...settings, [key]: filtered });
   next.invalidateCache();
   return next;
 }

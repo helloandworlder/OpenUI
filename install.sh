@@ -38,34 +38,98 @@ install_base() {
     case "${release}" in
         ubuntu | debian | armbian)
             apt-get update
-            apt-get install -y -q curl tar ca-certificates
+            apt-get install -y -q curl tar ca-certificates openssl socat
             ;;
         fedora | amzn | virtuozzo | rhel | almalinux | rocky | ol)
-            dnf install -y -q curl tar ca-certificates
+            dnf install -y -q curl tar ca-certificates openssl socat
             ;;
         centos)
             if [[ "${VERSION_ID:-}" =~ ^7 ]]; then
-                yum install -y curl tar ca-certificates
+                yum install -y curl tar ca-certificates openssl socat
             else
-                dnf install -y -q curl tar ca-certificates
+                dnf install -y -q curl tar ca-certificates openssl socat
             fi
             ;;
         arch | manjaro | parch)
-            pacman -Sy --noconfirm curl tar ca-certificates
+            pacman -Sy --noconfirm curl tar ca-certificates openssl socat
             ;;
         opensuse-tumbleweed | opensuse-leap)
             zypper refresh
-            zypper -q install -y curl tar ca-certificates
+            zypper -q install -y curl tar ca-certificates openssl socat
             ;;
         alpine)
             apk update
-            apk add curl tar ca-certificates openrc
+            apk add curl tar ca-certificates openssl socat openrc
             ;;
         *)
             apt-get update
-            apt-get install -y -q curl tar ca-certificates
+            apt-get install -y -q curl tar ca-certificates openssl socat
             ;;
     esac
+}
+
+gen_random_string() {
+    local length="$1"
+    openssl rand -base64 $((length * 2)) | tr -dc 'a-zA-Z0-9' | head -c "${length}"
+}
+
+is_port_in_use() {
+    local port="$1"
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltn 2>/dev/null | awk -v p=":${port}$" '$4 ~ p {found=1} END {exit found ? 0 : 1}'
+        return
+    fi
+    if command -v netstat >/dev/null 2>&1; then
+        netstat -lnt 2>/dev/null | awk -v p=":${port} " '$4 ~ p {found=1} END {exit found ? 0 : 1}'
+        return
+    fi
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1 && return 0
+    fi
+    return 1
+}
+
+pick_random_panel_port() {
+    local port
+    for _ in $(seq 1 40); do
+        port="$(shuf -i 1024-62000 -n 1)"
+        if ! is_port_in_use "${port}"; then
+            echo "${port}"
+            return 0
+        fi
+    done
+    echo -e "${red}Fatal error:${plain} Failed to pick a free panel port." >&2
+    exit 1
+}
+
+detect_server_ipv4() {
+    local url response http_code ip_result
+    local urls=(
+        "https://api4.ipify.org"
+        "https://ipv4.icanhazip.com"
+        "https://v4.api.ipinfo.io/ip"
+        "https://ipv4.myexternalip.com/raw"
+        "https://4.ident.me"
+        "https://check-host.net/ip"
+    )
+    for url in "${urls[@]}"; do
+        response="$(curl -s -w "\n%{http_code}" --max-time 3 "${url}" 2>/dev/null || true)"
+        http_code="$(echo "${response}" | tail -n1)"
+        ip_result="$(echo "${response}" | head -n-1 | tr -d '[:space:]"')"
+        if [[ "${http_code}" == "200" && "${ip_result}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "${ip_result}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+install_acme() {
+    if [[ -x "${HOME}/.acme.sh/acme.sh" ]]; then
+        return 0
+    fi
+    echo -e "${green}Installing acme.sh for OpenUI IP certificate...${plain}"
+    curl -fsSL https://get.acme.sh | sh -s email=admin@open-ui.local
 }
 
 latest_version() {
@@ -174,6 +238,116 @@ EOF
     systemctl start "${OPENUI_SERVICE_NAME}"
 }
 
+configure_initial_security() {
+    local settings
+    if ! settings="$("${OPENUI_INSTALL_DIR}/open-ui" setting -show true 2>/dev/null)"; then
+        echo -e "${yellow}Warning:${plain} Could not read OpenUI settings for initial security setup." >&2
+        return 0
+    fi
+
+    local has_default_credential existing_webbasepath existing_port existing_cert
+    has_default_credential="$(echo "${settings}" | grep -Eo 'hasDefaultCredential: .+' | awk '{print $2}' || true)"
+    existing_webbasepath="$(echo "${settings}" | grep -Eo 'webBasePath: .+' | awk '{print $2}' | sed 's#^/##' || true)"
+    existing_port="$(echo "${settings}" | grep -Eo 'port: .+' | awk '{print $2}' || true)"
+    existing_cert="$("${OPENUI_INSTALL_DIR}/open-ui" setting -getCert true 2>/dev/null | grep 'cert:' | awk -F': ' '{print $2}' | tr -d '[:space:]' || true)"
+
+    local username="" password="" webbasepath="${existing_webbasepath}" panel_port="${existing_port}"
+    if [[ "${has_default_credential}" == "true" ]]; then
+        username="$(gen_random_string 10)"
+        password="$(gen_random_string 18)"
+    fi
+    if [[ ${#webbasepath} -lt 4 ]]; then
+        webbasepath="$(gen_random_string 18)"
+    fi
+    if [[ -z "${panel_port}" || "${panel_port}" == "2053" ]] || is_port_in_use "${panel_port}"; then
+        panel_port="$(pick_random_panel_port)"
+    fi
+
+    if [[ -n "${username}" || "${webbasepath}" != "${existing_webbasepath}" || "${panel_port}" != "${existing_port}" ]]; then
+        local setting_args=(-port "${panel_port}" -webBasePath "${webbasepath}")
+        if [[ -n "${username}" ]]; then
+            setting_args=(-username "${username}" -password "${password}" "${setting_args[@]}")
+        fi
+        "${OPENUI_INSTALL_DIR}/open-ui" setting "${setting_args[@]}" >/dev/null
+    fi
+
+    local scheme="http" host
+    host="$(detect_server_ipv4 || true)"
+    if [[ -n "${existing_cert}" ]]; then
+        scheme="https"
+        host="${host:-127.0.0.1}"
+    elif [[ -n "${host}" ]]; then
+        if setup_ip_certificate "${host}"; then
+            scheme="https"
+        else
+            echo -e "${yellow}Warning:${plain} IP certificate setup failed or port 80 is unavailable; OpenUI remains HTTP until SSL is configured." >&2
+        fi
+    else
+        host="127.0.0.1"
+        echo -e "${yellow}Warning:${plain} Could not detect public IPv4; skipped automatic IP certificate setup." >&2
+    fi
+
+    if [[ "${release}" == "alpine" ]]; then
+        rc-service "${OPENUI_SERVICE_NAME}" restart >/dev/null 2>&1 || true
+    else
+        systemctl restart "${OPENUI_SERVICE_NAME}" >/dev/null 2>&1 || true
+    fi
+
+    echo ""
+    echo -e "${green}OpenUI panel initialized.${plain}"
+    if [[ -n "${username}" ]]; then
+        echo -e "${green}Username: ${username}${plain}"
+        echo -e "${green}Password: ${password}${plain}"
+    else
+        echo -e "${green}Username/password: existing credentials preserved${plain}"
+    fi
+    echo -e "${green}Port: ${panel_port}${plain}"
+    echo -e "${green}WebBasePath: ${webbasepath}${plain}"
+    echo -e "${green}Access URL: ${scheme}://${host}:${panel_port}/${webbasepath}${plain}"
+}
+
+setup_ip_certificate() {
+    local server_ip="$1"
+    local cert_dir="/root/cert/ip"
+
+    if is_port_in_use 80; then
+        echo -e "${yellow}Port 80 is already in use; skipping automatic IP certificate.${plain}" >&2
+        return 1
+    fi
+    if ! install_acme; then
+        return 1
+    fi
+
+    mkdir -p "${cert_dir}"
+    "${HOME}/.acme.sh/acme.sh" --set-default-ca --server letsencrypt --force >/dev/null 2>&1 || true
+    if ! "${HOME}/.acme.sh/acme.sh" --issue \
+        -d "${server_ip}" \
+        --standalone \
+        --server letsencrypt \
+        --certificate-profile shortlived \
+        --days 6 \
+        --httpport 80 \
+        --force; then
+        rm -rf "${HOME}/.acme.sh/${server_ip}" "${cert_dir}" 2>/dev/null || true
+        return 1
+    fi
+
+    "${HOME}/.acme.sh/acme.sh" --installcert -d "${server_ip}" \
+        --key-file "${cert_dir}/privkey.pem" \
+        --fullchain-file "${cert_dir}/fullchain.pem" \
+        --reloadcmd "systemctl restart ${OPENUI_SERVICE_NAME} 2>/dev/null || rc-service ${OPENUI_SERVICE_NAME} restart 2>/dev/null || true" >/dev/null 2>&1 || true
+
+    if [[ ! -f "${cert_dir}/fullchain.pem" || ! -f "${cert_dir}/privkey.pem" ]]; then
+        rm -rf "${HOME}/.acme.sh/${server_ip}" "${cert_dir}" 2>/dev/null || true
+        return 1
+    fi
+
+    chmod 600 "${cert_dir}/privkey.pem" 2>/dev/null || true
+    chmod 644 "${cert_dir}/fullchain.pem" 2>/dev/null || true
+    "${HOME}/.acme.sh/acme.sh" --upgrade --auto-upgrade >/dev/null 2>&1 || true
+    "${OPENUI_INSTALL_DIR}/open-ui" cert -webCert "${cert_dir}/fullchain.pem" -webCertKey "${cert_dir}/privkey.pem" >/dev/null
+}
+
 main() {
     echo -e "${green}Installing OpenUI...${plain}"
     echo "Repository: ${OPENUI_REPO}"
@@ -196,6 +370,7 @@ main() {
     stop_existing
     install_files "${archive}"
     install_service
+    configure_initial_security
     rm -f "${archive}"
 
     echo -e "${green}OpenUI ${version} installation finished.${plain}"

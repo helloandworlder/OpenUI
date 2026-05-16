@@ -2,7 +2,9 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/mhsanaei/3x-ui/v3/util/json_util"
 	"github.com/mhsanaei/3x-ui/v3/xray"
@@ -109,11 +111,125 @@ func (i *Inbound) GenXrayInboundConfig() *xray.InboundConfig {
 		Listen:         json_util.RawMessage(listen),
 		Port:           i.Port,
 		Protocol:       string(i.Protocol),
-		Settings:       json_util.RawMessage(i.Settings),
+		Settings:       json_util.RawMessage(i.XrayRuntimeSettings()),
 		StreamSettings: json_util.RawMessage(i.StreamSettings),
 		Tag:            i.Tag,
 		Sniffing:       json_util.RawMessage(i.Sniffing),
 	}
+}
+
+// XrayRuntimeSettings returns settings stripped down to the fields that Xray
+// should receive. The panel stores extra client metadata in settings.clients;
+// Mixed/HTTP Xray inbounds consume settings.accounts instead.
+func (i *Inbound) XrayRuntimeSettings() string {
+	if i.Protocol != Mixed && i.Protocol != HTTP {
+		return i.Settings
+	}
+
+	settings := map[string]any{}
+	if err := json.Unmarshal([]byte(i.Settings), &settings); err != nil {
+		return i.Settings
+	}
+
+	rawAccounts, ok := settings["clients"].([]any)
+	if !ok {
+		rawAccounts, _ = settings["accounts"].([]any)
+	}
+
+	if i.Protocol == Mixed && settings["auth"] != "password" {
+		rawAccounts = nil
+	}
+
+	defaultUplink := numericInt64(settings["uplinkLimitBps"])
+	defaultDownlink := numericInt64(settings["downlinkLimitBps"])
+	defaultMaxConnections := numericInt32(settings["maxConnections"])
+	accounts := make([]any, 0, len(rawAccounts))
+	for _, item := range rawAccounts {
+		account, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if enabled, ok := account["enable"].(bool); ok && !enabled {
+			continue
+		}
+
+		runtimeAccount := map[string]any{}
+		for _, key := range []string{
+			"user",
+			"pass",
+			"email",
+			"level",
+		} {
+			if value, ok := account[key]; ok {
+				runtimeAccount[key] = value
+			}
+		}
+		if runtimeAccount["email"] == nil {
+			runtimeAccount["email"] = runtimeAccount["user"]
+		}
+		runtimeAccount["uplinkLimitBps"] = inheritInt64(numericInt64(account["uplinkLimitBps"]), defaultUplink)
+		runtimeAccount["downlinkLimitBps"] = inheritInt64(numericInt64(account["downlinkLimitBps"]), defaultDownlink)
+		runtimeAccount["maxConnections"] = inheritInt32(numericInt32(account["maxConnections"]), defaultMaxConnections)
+		accounts = append(accounts, runtimeAccount)
+	}
+
+	delete(settings, "clients")
+	delete(settings, "uplinkLimitBps")
+	delete(settings, "downlinkLimitBps")
+	delete(settings, "maxConnections")
+	settings["accounts"] = accounts
+	if out, err := json.MarshalIndent(settings, "", "  "); err == nil {
+		return string(out)
+	}
+	return i.Settings
+}
+
+func inheritInt64(value int64, defaultValue int64) int64 {
+	if value > 0 {
+		return value
+	}
+	return defaultValue
+}
+
+func inheritInt32(value int32, defaultValue int32) int32 {
+	if value > 0 {
+		return value
+	}
+	return defaultValue
+}
+
+func numericInt64(value any) int64 {
+	switch v := value.(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case int32:
+		return int64(v)
+	case float64:
+		return int64(v)
+	case float32:
+		return int64(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return n
+	case string:
+		n, _ := strconv.ParseInt(v, 10, 64)
+		return n
+	default:
+		return 0
+	}
+}
+
+func numericInt32(value any) int32 {
+	n := numericInt64(value)
+	if n <= 0 {
+		return 0
+	}
+	if n > int64(^uint32(0)>>1) {
+		return int32(^uint32(0) >> 1)
+	}
+	return int32(n)
 }
 
 // Setting stores key-value configuration settings for the 3x-ui panel.
@@ -173,21 +289,55 @@ type ClientReverse struct {
 
 // Client represents a client configuration for Xray inbounds with traffic limits and settings.
 type Client struct {
-	ID         string         `json:"id,omitempty"`                 // Unique client identifier
-	Security   string         `json:"security"`                     // Security method (e.g., "auto", "aes-128-gcm")
-	Password   string         `json:"password,omitempty"`           // Client password
-	Flow       string         `json:"flow,omitempty"`               // Flow control (XTLS)
-	Reverse    *ClientReverse `json:"reverse,omitempty"`            // VLESS simple reverse proxy settings
-	Auth       string         `json:"auth,omitempty"`               // Auth password (Hysteria)
-	Email      string         `json:"email"`                        // Client email identifier
-	LimitIP    int            `json:"limitIp"`                      // IP limit for this client
-	TotalGB    int64          `json:"totalGB" form:"totalGB"`       // Total traffic limit in GB
-	ExpiryTime int64          `json:"expiryTime" form:"expiryTime"` // Expiration timestamp
-	Enable     bool           `json:"enable" form:"enable"`         // Whether the client is enabled
-	TgID       int64          `json:"tgId" form:"tgId"`             // Telegram user ID for notifications
-	SubID      string         `json:"subId" form:"subId"`           // Subscription identifier
-	Comment    string         `json:"comment" form:"comment"`       // Client comment
-	Reset      int            `json:"reset" form:"reset"`           // Reset period in days
-	CreatedAt  int64          `json:"created_at,omitempty"`         // Creation timestamp
-	UpdatedAt  int64          `json:"updated_at,omitempty"`         // Last update timestamp
+	ID               string         `json:"id,omitempty"`                 // Unique client identifier
+	Security         string         `json:"security"`                     // Security method (e.g., "auto", "aes-128-gcm")
+	Password         string         `json:"password,omitempty"`           // Client password
+	Flow             string         `json:"flow,omitempty"`               // Flow control (XTLS)
+	Reverse          *ClientReverse `json:"reverse,omitempty"`            // VLESS simple reverse proxy settings
+	Auth             string         `json:"auth,omitempty"`               // Auth password (Hysteria)
+	User             string         `json:"user,omitempty"`               // Username for HTTP/Mixed account protocols
+	Pass             string         `json:"pass,omitempty"`               // Password for HTTP/Mixed account protocols
+	Email            string         `json:"email"`                        // Client email identifier
+	UplinkLimitBps   int64          `json:"uplinkLimitBps,omitempty"`     // Per-client upload speed limit in bytes/sec
+	DownlinkLimitBps int64          `json:"downlinkLimitBps,omitempty"`   // Per-client download speed limit in bytes/sec
+	MaxConnections   int32          `json:"maxConnections,omitempty"`     // Per-client concurrent connection limit
+	LimitIP          int            `json:"limitIp"`                      // IP limit for this client
+	TotalGB          int64          `json:"totalGB" form:"totalGB"`       // Total traffic limit in GB
+	ExpiryTime       int64          `json:"expiryTime" form:"expiryTime"` // Expiration timestamp
+	Enable           bool           `json:"enable" form:"enable"`         // Whether the client is enabled
+	TgID             int64          `json:"tgId" form:"tgId"`             // Telegram user ID for notifications
+	SubID            string         `json:"subId" form:"subId"`           // Subscription identifier
+	Comment          string         `json:"comment" form:"comment"`       // Client comment
+	Reset            int            `json:"reset" form:"reset"`           // Reset period in days
+	CreatedAt        int64          `json:"created_at,omitempty"`         // Creation timestamp
+	UpdatedAt        int64          `json:"updated_at,omitempty"`         // Last update timestamp
+}
+
+func (c *Client) UnmarshalJSON(data []byte) error {
+	type clientAlias Client
+	aux := struct {
+		TgID any `json:"tgId"`
+		*clientAlias
+	}{
+		clientAlias: (*clientAlias)(c),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	switch v := aux.TgID.(type) {
+	case nil:
+	case float64:
+		c.TgID = int64(v)
+	case string:
+		if v == "" {
+			c.TgID = 0
+			return nil
+		}
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return err
+		}
+		c.TgID = n
+	}
+	return nil
 }

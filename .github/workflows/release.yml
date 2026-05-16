@@ -72,19 +72,27 @@ jobs:
           cp open-ui.sh open-ui/open-ui.sh
           mkdir open-ui/bin
 
+          XRAY_REPO="https://github.com/helloandworlder/Xray-core.git"
+          XRAY_REF="openui-v26.5.9-rlimit.1"
+          git clone --depth 1 --branch "${XRAY_REF}" "${XRAY_REPO}" /tmp/openui-xray-core
+          (
+            cd /tmp/openui-xray-core
+            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+              -o "${GITHUB_WORKSPACE}/open-ui/bin/xray-linux-amd64" \
+              -trimpath \
+              -buildvcs=false \
+              -gcflags="all=-l=4" \
+              -ldflags="-X github.com/xtls/xray-core/core.build=${XRAY_REF} -s -w -buildid=" \
+              -v ./main
+          )
+
           cd open-ui/bin
-          XRAY_URL="https://github.com/XTLS/Xray-core/releases/download/v26.4.25/"
-          XRAY_ASSET="Xray-linux-64.zip"
-          wget -q "${XRAY_URL}${XRAY_ASSET}"
-          unzip "${XRAY_ASSET}"
-          rm -f "${XRAY_ASSET}" geoip.dat geosite.dat
           wget -q https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
           wget -q https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat
           wget -q -O geoip_IR.dat https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geoip.dat
           wget -q -O geosite_IR.dat https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geosite.dat
           wget -q -O geoip_RU.dat https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geoip.dat
           wget -q -O geosite_RU.dat https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat
-          mv xray xray-linux-amd64
 
       - name: Package
         run: tar -zcvf open-ui-linux-amd64.tar.gz open-ui

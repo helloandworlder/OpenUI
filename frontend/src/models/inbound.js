@@ -1715,6 +1715,8 @@ export class Inbound extends XrayCommonClass {
             case Protocols.TROJAN: return this.settings.trojans;
             case Protocols.SHADOWSOCKS: return this.isSSMultiUser ? this.settings.shadowsockses : null;
             case Protocols.HYSTERIA: return this.settings.hysterias;
+            case Protocols.MIXED: return this.settings.auth === 'password' ? this.settings.clients : null;
+            case Protocols.HTTP: return this.settings.clients;
             default: return null;
         }
     }
@@ -2252,6 +2254,27 @@ export class Inbound extends XrayCommonClass {
         return url.toString();
     }
 
+    genHttpAccountLink(address = '', port = this.port, remark = '', client) {
+        if (!client) return '';
+        const link = `http://${client.user || ''}:${client.pass || ''}@${address}:${port}`;
+        const url = new URL(link);
+        url.hash = encodeURIComponent(remark);
+        return url.toString();
+    }
+
+    genSocksAccountLink(address = '', port = this.port, remark = '', client) {
+        if (!client) return '';
+        const link = `socks5://${client.user || ''}:${client.pass || ''}@${address}:${port}`;
+        const url = new URL(link);
+        url.hash = encodeURIComponent(remark);
+        return url.toString();
+    }
+
+    genAccountText(address = '', port = this.port, client) {
+        if (!client) return '';
+        return `${address}:${port}:${client.user || ''}:${client.pass || ''}`;
+    }
+
     getWireguardTxt(address, port, remark, peerId) {
         let txt = `[Interface]\n`
         txt += `PrivateKey = ${this.settings.peers[peerId].privateKey}\n`
@@ -2340,6 +2363,10 @@ export class Inbound extends XrayCommonClass {
                 return this.genTrojanLink(address, port, forceTls, remark, client.password);
             case Protocols.HYSTERIA:
                 return this.genHysteriaLink(address, port, remark, client.auth.length > 0 ? client.auth : this.stream.hysteria.auth);
+            case Protocols.MIXED:
+                return this.genSocksAccountLink(address, port, remark, client);
+            case Protocols.HTTP:
+                return this.genHttpAccountLink(address, port, remark, client);
             default: return '';
         }
     }
@@ -2356,6 +2383,15 @@ export class Inbound extends XrayCommonClass {
             'e': email,
             'o': '',
         };
+        if (this.protocol === Protocols.MIXED || this.protocol === Protocols.HTTP) {
+            const r = orderChars.split('').map(char => orders[char]).filter(x => x.length > 0).join(separationChar);
+            if (this.protocol === Protocols.MIXED) {
+                result.push({ remark: `${r}-socks5`, link: this.genSocksAccountLink(addr, port, `${r}-socks5`, client) });
+            }
+            result.push({ remark: `${r}-http`, link: this.genHttpAccountLink(addr, port, `${r}-http`, client) });
+            result.push({ remark: `${r}-text`, link: this.genAccountText(addr, port, client) });
+            return result;
+        }
         if (ObjectUtil.isArrEmpty(this.stream.externalProxy)) {
             let r = orderChars.split('').map(char => orders[char]).filter(x => x.length > 0).join(separationChar);
             result.push({
@@ -2476,15 +2512,21 @@ Inbound.ClientBase = class extends XrayCommonClass {
         totalGB = 0,
         expiryTime = 0,
         enable = true,
-        tgId = '',
+        tgId = 0,
         subId = RandomUtil.randomLowerAndNum(16),
         comment = '',
         reset = 0,
         created_at = undefined,
         updated_at = undefined,
+        uplinkLimitBps = 0,
+        downlinkLimitBps = 0,
+        maxConnections = 0,
     ) {
         super();
         this.email = email;
+        this.uplinkLimitBps = uplinkLimitBps;
+        this.downlinkLimitBps = downlinkLimitBps;
+        this.maxConnections = maxConnections;
         this.limitIp = limitIp;
         this.totalGB = totalGB;
         this.expiryTime = expiryTime;
@@ -2510,17 +2552,23 @@ Inbound.ClientBase = class extends XrayCommonClass {
             json.reset,
             json.created_at,
             json.updated_at,
+            json.uplinkLimitBps,
+            json.downlinkLimitBps,
+            json.maxConnections,
         ];
     }
 
     _clientBaseToJson() {
         return {
             email: this.email,
+            uplinkLimitBps: this.uplinkLimitBps,
+            downlinkLimitBps: this.downlinkLimitBps,
+            maxConnections: this.maxConnections,
             limitIp: this.limitIp,
             totalGB: this.totalGB,
             expiryTime: this.expiryTime,
             enable: this.enable,
-            tgId: this.tgId,
+            tgId: Number(this.tgId) || 0,
             subId: this.subId,
             comment: this.comment,
             reset: this.reset,
@@ -3004,103 +3052,229 @@ Inbound.TunnelSettings = class extends Inbound.Settings {
 };
 
 Inbound.MixedSettings = class extends Inbound.Settings {
-    constructor(protocol, auth = 'password', accounts = [new Inbound.MixedSettings.SocksAccount()], udp = false, ip = '127.0.0.1') {
+    constructor(
+        protocol,
+        auth = 'password',
+        clients = [new Inbound.MixedSettings.SocksAccount()],
+        udp = false,
+        ip = '127.0.0.1',
+        uplinkLimitBps = 0,
+        downlinkLimitBps = 0,
+        maxConnections = 0,
+    ) {
         super(protocol);
         this.auth = auth;
-        this.accounts = accounts;
+        this.clients = clients;
         this.udp = udp;
         this.ip = ip;
+        this.uplinkLimitBps = uplinkLimitBps;
+        this.downlinkLimitBps = downlinkLimitBps;
+        this.maxConnections = maxConnections;
+    }
+
+    get accounts() {
+        return this.clients;
+    }
+
+    set accounts(next) {
+        this.clients = next;
+    }
+
+    addClient(client) {
+        this.clients.push(client);
+    }
+
+    delClient(index) {
+        this.clients.splice(index, 1);
     }
 
     addAccount(account) {
-        this.accounts.push(account);
+        this.addClient(account);
     }
 
     delAccount(index) {
-        this.accounts.splice(index, 1);
+        this.delClient(index);
     }
 
     static fromJson(json = {}) {
-        let accounts;
+        let clients;
         if (json.auth === 'password') {
-            accounts = json.accounts.map(
+            clients = (json.clients || json.accounts || []).map(
                 account => Inbound.MixedSettings.SocksAccount.fromJson(account)
             )
         }
         return new Inbound.MixedSettings(
             Protocols.MIXED,
             json.auth,
-            accounts,
+            clients,
             json.udp,
             json.ip,
+            json.uplinkLimitBps,
+            json.downlinkLimitBps,
+            json.maxConnections,
         );
     }
 
     toJson() {
         return {
             auth: this.auth,
-            accounts: this.auth === 'password' ? this.accounts.map(account => account.toJson()) : undefined,
+            clients: this.auth === 'password' ? this.clients.map(client => client.toJson()) : undefined,
+            uplinkLimitBps: this.uplinkLimitBps || 0,
+            downlinkLimitBps: this.downlinkLimitBps || 0,
+            maxConnections: this.maxConnections || 0,
             udp: this.udp,
             ip: this.ip,
         };
     }
 };
-Inbound.MixedSettings.SocksAccount = class extends XrayCommonClass {
-    constructor(user = RandomUtil.randomSeq(10), pass = RandomUtil.randomSeq(10)) {
-        super();
+Inbound.MixedSettings.SocksAccount = class extends Inbound.ClientBase {
+    constructor(
+        user = RandomUtil.randomSeq(10),
+        pass = RandomUtil.randomSeq(10),
+        email, limitIp, totalGB, expiryTime, enable, tgId, subId, comment, reset, created_at, updated_at,
+        uplinkLimitBps, downlinkLimitBps, maxConnections,
+    ) {
+        super(
+            email || user,
+            limitIp,
+            totalGB,
+            expiryTime,
+            enable,
+            tgId,
+            subId,
+            comment,
+            reset,
+            created_at,
+            updated_at,
+            uplinkLimitBps,
+            downlinkLimitBps,
+            maxConnections,
+        );
         this.user = user;
         this.pass = pass;
     }
 
+    toJson() {
+        return {
+            user: this.user,
+            pass: this.pass,
+            ...this._clientBaseToJson(),
+        };
+    }
+
     static fromJson(json = {}) {
-        return new Inbound.MixedSettings.SocksAccount(json.user, json.pass);
+        return new Inbound.MixedSettings.SocksAccount(
+            json.user,
+            json.pass,
+            ...Inbound.ClientBase.commonArgsFromJson({ email: json.email || json.user, ...json }),
+        );
     }
 };
 
 Inbound.HttpSettings = class extends Inbound.Settings {
     constructor(
         protocol,
-        accounts = [new Inbound.HttpSettings.HttpAccount()],
+        clients = [new Inbound.HttpSettings.HttpAccount()],
         allowTransparent = false,
+        uplinkLimitBps = 0,
+        downlinkLimitBps = 0,
+        maxConnections = 0,
     ) {
         super(protocol);
-        this.accounts = accounts;
+        this.clients = clients;
         this.allowTransparent = allowTransparent;
+        this.uplinkLimitBps = uplinkLimitBps;
+        this.downlinkLimitBps = downlinkLimitBps;
+        this.maxConnections = maxConnections;
+    }
+
+    get accounts() {
+        return this.clients;
+    }
+
+    set accounts(next) {
+        this.clients = next;
+    }
+
+    addClient(client) {
+        this.clients.push(client);
+    }
+
+    delClient(index) {
+        this.clients.splice(index, 1);
     }
 
     addAccount(account) {
-        this.accounts.push(account);
+        this.addClient(account);
     }
 
     delAccount(index) {
-        this.accounts.splice(index, 1);
+        this.delClient(index);
     }
 
     static fromJson(json = {}) {
         return new Inbound.HttpSettings(
             Protocols.HTTP,
-            json.accounts.map(account => Inbound.HttpSettings.HttpAccount.fromJson(account)),
+            (json.clients || json.accounts || []).map(account => Inbound.HttpSettings.HttpAccount.fromJson(account)),
             json.allowTransparent,
+            json.uplinkLimitBps,
+            json.downlinkLimitBps,
+            json.maxConnections,
         );
     }
 
     toJson() {
         return {
-            accounts: Inbound.HttpSettings.toJsonArray(this.accounts),
+            clients: Inbound.HttpSettings.toJsonArray(this.clients),
             allowTransparent: this.allowTransparent,
+            uplinkLimitBps: this.uplinkLimitBps || 0,
+            downlinkLimitBps: this.downlinkLimitBps || 0,
+            maxConnections: this.maxConnections || 0,
         };
     }
 };
 
-Inbound.HttpSettings.HttpAccount = class extends XrayCommonClass {
-    constructor(user = RandomUtil.randomSeq(10), pass = RandomUtil.randomSeq(10)) {
-        super();
+Inbound.HttpSettings.HttpAccount = class extends Inbound.ClientBase {
+    constructor(
+        user = RandomUtil.randomSeq(10),
+        pass = RandomUtil.randomSeq(10),
+        email, limitIp, totalGB, expiryTime, enable, tgId, subId, comment, reset, created_at, updated_at,
+        uplinkLimitBps, downlinkLimitBps, maxConnections,
+    ) {
+        super(
+            email || user,
+            limitIp,
+            totalGB,
+            expiryTime,
+            enable,
+            tgId,
+            subId,
+            comment,
+            reset,
+            created_at,
+            updated_at,
+            uplinkLimitBps,
+            downlinkLimitBps,
+            maxConnections,
+        );
         this.user = user;
         this.pass = pass;
     }
 
+    toJson() {
+        return {
+            user: this.user,
+            pass: this.pass,
+            ...this._clientBaseToJson(),
+        };
+    }
+
     static fromJson(json = {}) {
-        return new Inbound.HttpSettings.HttpAccount(json.user, json.pass);
+        return new Inbound.HttpSettings.HttpAccount(
+            json.user,
+            json.pass,
+            ...Inbound.ClientBase.commonArgsFromJson({ email: json.email || json.user, ...json }),
+        );
     }
 };
 

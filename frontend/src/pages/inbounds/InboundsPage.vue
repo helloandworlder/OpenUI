@@ -276,6 +276,9 @@ function findClientIndex(dbInbound, client) {
       case 'trojan':
       case 'shadowsocks':
         return c.password === client.password && c.email === client.email;
+      case 'mixed':
+      case 'http':
+        return c.email === client.email;
       default:
         return c.id === client.id && c.email === client.email;
     }
@@ -288,6 +291,8 @@ function getClientId(protocol, client) {
     case 'trojan': return client.password;
     case 'shadowsocks': return client.email;
     case 'hysteria': return client.auth;
+    case 'mixed':
+    case 'http': return client.email;
     default: return client.id;
   }
 }

@@ -108,6 +108,8 @@ function makeNewClient(parsed) {
       return new Inbound.ShadowsocksSettings.Shadowsocks(method);
     }
     case Protocols.HYSTERIA: return new Inbound.HysteriaSettings.Hysteria();
+    case Protocols.MIXED: return new Inbound.MixedSettings.SocksAccount();
+    case Protocols.HTTP: return new Inbound.HttpSettings.HttpAccount();
     default: return null;
   }
 }

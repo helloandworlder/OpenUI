@@ -190,6 +190,23 @@ const clientTotalGB = computed({
   set: (gb) => { if (firstClient.value) firstClient.value._totalGB = gb || 0; },
 });
 
+const defaultUplinkUnit = ref('Kbps');
+const defaultDownlinkUnit = ref('Kbps');
+
+function unitMultiplier(unit) {
+  return unit === 'Mbps' ? 1024 * 1024 : 1024;
+}
+
+function speedBpsBridge(targetRef, key, unitRef) {
+  return computed({
+    get: () => Math.round(((targetRef.value?.[key] || 0) / unitMultiplier(unitRef.value)) * 100) / 100,
+    set: (value) => { if (targetRef.value) targetRef.value[key] = Math.round((value || 0) * unitMultiplier(unitRef.value)); },
+  });
+}
+
+const inboundDefaultUplinkLimit = speedBpsBridge(computed(() => inbound.value?.settings), 'uplinkLimitBps', defaultUplinkUnit);
+const inboundDefaultDownlinkLimit = speedBpsBridge(computed(() => inbound.value?.settings), 'downlinkLimitBps', defaultDownlinkUnit);
+
 // === Open / state management =======================================
 function loadFromDbInbound(dbIn) {
   // Round-trip through Inbound.fromJson so subsequent edits get the
@@ -850,29 +867,6 @@ watch(
         <!-- HTTP / Mixed accounts -->
         <a-form v-if="protocol === Protocols.HTTP || protocol === Protocols.MIXED" :colon="false"
           :label-col="{ sm: { span: 8 } }" :wrapper-col="{ sm: { span: 14 } }" class="mt-12">
-          <a-form-item label="Accounts">
-            <a-button size="small" @click="protocol === Protocols.HTTP
-              ? inbound.settings.addAccount(new Inbound.HttpSettings.HttpAccount())
-              : inbound.settings.addAccount(new Inbound.MixedSettings.SocksAccount())">
-              <template #icon>
-                <PlusOutlined />
-              </template>
-              Add
-            </a-button>
-          </a-form-item>
-          <a-form-item :wrapper-col="{ span: 24 }">
-            <a-input-group v-for="(account, idx) in inbound.settings.accounts" :key="idx" compact class="mb-8">
-              <a-input :style="{ width: '45%' }" v-model:value="account.user" placeholder="Username">
-                <template #addonBefore>{{ idx + 1 }}</template>
-              </a-input>
-              <a-input :style="{ width: '45%' }" v-model:value="account.pass" placeholder="Password" />
-              <a-button @click="inbound.settings.delAccount(idx)">
-                <template #icon>
-                  <MinusOutlined />
-                </template>
-              </a-button>
-            </a-input-group>
-          </a-form-item>
           <a-form-item v-if="protocol === Protocols.HTTP" label="Allow transparent">
             <a-switch v-model:checked="inbound.settings.allowTransparent" />
           </a-form-item>
@@ -888,6 +882,31 @@ watch(
             </a-form-item>
             <a-form-item v-if="inbound.settings.udp" label="UDP IP">
               <a-input v-model:value="inbound.settings.ip" />
+            </a-form-item>
+          </template>
+          <template v-if="protocol === Protocols.HTTP || inbound.settings.auth === 'password'">
+            <a-form-item label="Default uplink">
+              <a-input-group compact>
+                <a-input-number v-model:value="inboundDefaultUplinkLimit" :min="0" :step="1"
+                  :style="{ width: '65%' }" />
+                <a-select v-model:value="defaultUplinkUnit" :style="{ width: '35%' }">
+                  <a-select-option value="Kbps">Kbps</a-select-option>
+                  <a-select-option value="Mbps">Mbps</a-select-option>
+                </a-select>
+              </a-input-group>
+            </a-form-item>
+            <a-form-item label="Default downlink">
+              <a-input-group compact>
+                <a-input-number v-model:value="inboundDefaultDownlinkLimit" :min="0" :step="1"
+                  :style="{ width: '65%' }" />
+                <a-select v-model:value="defaultDownlinkUnit" :style="{ width: '35%' }">
+                  <a-select-option value="Kbps">Kbps</a-select-option>
+                  <a-select-option value="Mbps">Mbps</a-select-option>
+                </a-select>
+              </a-input-group>
+            </a-form-item>
+            <a-form-item label="Default max connections">
+              <a-input-number v-model:value="inbound.settings.maxConnections" :min="0" />
             </a-form-item>
           </template>
         </a-form>
