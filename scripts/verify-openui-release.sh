@@ -15,8 +15,7 @@ workflow = pathlib.Path(".github/workflows/release.yml")
 text = workflow.read_text()
 required = [
     "name: Release OpenUI",
-    "  build-linux:",
-    "  build-windows:",
+    "  build-linux-amd64:",
     "uses: actions/checkout@v6",
     "uses: actions/setup-go@v6",
     "uses: actions/setup-node@v6",
@@ -39,10 +38,13 @@ for file in "${required_files[@]}"; do
   test -f "${file}"
 done
 
-grep -q "open-ui-linux-\${{ matrix.platform }}.tar.gz" .github/workflows/release.yml
-grep -q "open-ui-windows-amd64.zip" .github/workflows/release.yml
+grep -q "open-ui-linux-amd64.tar.gz" .github/workflows/release.yml
 grep -q "open-ui/" .github/workflows/release.yml
 grep -q "cp open-ui.sh open-ui/open-ui.sh" .github/workflows/release.yml
+if grep -q "matrix\\|windows-latest\\|GOARCH=arm\\|GOARCH=386\\|s390x\\|arm64\\|armv7\\|armv6\\|armv5\\|open-ui-windows" .github/workflows/release.yml; then
+  echo "release workflow must build linux amd64 only" >&2
+  exit 1
+fi
 grep -q "OPENUI_DB_FOLDER=/etc/open-ui" open-ui.service.debian
 grep -q "ExecStart=/usr/local/open-ui/open-ui" open-ui.service.debian
 grep -q "OPENUI_REPO" install.sh
