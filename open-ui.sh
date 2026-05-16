@@ -57,12 +57,12 @@ update_openui() {
     local url="https://github.com/${OPENUI_REPO}/releases/download/${version}/${asset}"
     local tmpdir
     tmpdir="$(mktemp -d)"
-    trap 'rm -rf "${tmpdir}"' RETURN
 
     echo -e "${green}Updating OpenUI to ${version} (${platform})...${plain}"
     curl -fL --retry 3 --retry-delay 2 -o "${tmpdir}/${asset}" "${url}"
     tar -zxf "${tmpdir}/${asset}" -C "${tmpdir}"
     if [[ ! -x "${tmpdir}/open-ui/open-ui" ]]; then
+        rm -rf "${tmpdir}"
         echo -e "${red}Fatal error:${plain} Release archive does not contain open-ui binary." >&2
         exit 1
     fi
@@ -78,6 +78,7 @@ update_openui() {
     fi
 
     restart_service
+    rm -rf "${tmpdir}"
     echo -e "${green}OpenUI ${version} update finished.${plain}"
 }
 

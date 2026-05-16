@@ -98,10 +98,10 @@ install_files() {
     local archive="$1"
     local tmpdir
     tmpdir="$(mktemp -d)"
-    trap 'rm -rf "${tmpdir}"' RETURN
 
     tar -zxf "${archive}" -C "${tmpdir}"
     if [[ ! -d "${tmpdir}/open-ui" ]]; then
+        rm -rf "${tmpdir}"
         echo -e "${red}Fatal error:${plain} Release archive does not contain open-ui/." >&2
         exit 1
     fi
@@ -121,6 +121,7 @@ EOF
 
     chmod 0755 "${OPENUI_INSTALL_DIR}/open-ui"
     find "${OPENUI_INSTALL_DIR}/bin" -type f -name 'xray-*' -exec chmod 0755 {} \; 2>/dev/null || true
+    rm -rf "${tmpdir}"
 }
 
 install_service() {
