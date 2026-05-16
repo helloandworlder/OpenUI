@@ -114,7 +114,18 @@ install_files() {
     else
         cat > "${OPENUI_CLI}" <<'EOF'
 #!/usr/bin/env bash
-exec /usr/local/open-ui/open-ui "$@"
+case "${1:-}" in
+  start|stop|restart|status)
+    exec systemctl "$1" open-ui
+    ;;
+  version)
+    exec /usr/local/open-ui/open-ui -v
+    ;;
+  *)
+    echo "OpenUI management script is missing. Reinstall with install.sh." >&2
+    exit 1
+    ;;
+esac
 EOF
         chmod 0755 "${OPENUI_CLI}"
     fi

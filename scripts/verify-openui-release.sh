@@ -5,6 +5,8 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_root}"
 
 bash -n install.sh
+bash -n update.sh
+bash -n open-ui.sh
 bash -n scripts/verify-openui-release.sh
 
 python3 - <<'PY'
@@ -49,14 +51,20 @@ grep -q "OPENUI_DB_FOLDER=/etc/open-ui" open-ui.service.debian
 grep -q "ExecStart=/usr/local/open-ui/open-ui" open-ui.service.debian
 grep -q "OPENUI_REPO" install.sh
 grep -q "helloandworlder/OpenUI" install.sh
-grep -q "update_openui" open-ui.sh
 grep -q "helloandworlder/OpenUI" open-ui.sh
+grep -q "show_menu" open-ui.sh
+grep -q "open-ui control menu usages" open-ui.sh
 grep -q "/usr/local/open-ui" install.sh
 grep -q "/etc/open-ui" install.sh
 grep -q "/usr/bin/open-ui" install.sh
 
-if grep -q "MHSanaei/3x-ui" install.sh .github/workflows/release.yml; then
-  echo "install/release files must not fetch upstream 3x-ui assets as the panel package" >&2
+if grep -Rqi "MHSanaei/3x-ui\|mhsanaei/3x-ui\|3x-ui\|3X-UI\|/usr/local/x-ui\|/usr/bin/x-ui\|/etc/x-ui\|/var/log/x-ui\|x-ui.service\|rc-service x-ui\|systemctl .*x-ui\|journalctl -u x-ui\|x-ui-linux" install.sh update.sh open-ui.sh .github/workflows; then
+  echo "OpenUI install, update, menu, and release files must not use upstream 3x-ui paths, services, or assets" >&2
+  exit 1
+fi
+
+if grep -q '"")' open-ui.sh; then
+  echo "open-ui with no arguments must show the management menu, not execute the panel binary" >&2
   exit 1
 fi
 

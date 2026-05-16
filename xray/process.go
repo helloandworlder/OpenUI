@@ -322,6 +322,14 @@ func (p *process) Start() (err error) {
 		}
 	}()
 
+	apiPort, changed, err := ensureAPIPortAvailable(p.config)
+	if err != nil {
+		return common.NewErrorf("Failed to prepare XRAY API port: %v", err)
+	}
+	if changed {
+		logger.Infof("Xray API port changed to available local port: %d", apiPort)
+	}
+
 	data, err := json.MarshalIndent(p.config, "", "  ")
 	if err != nil {
 		return common.NewErrorf("Failed to generate XRAY configuration files: %v", err)

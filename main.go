@@ -404,7 +404,7 @@ func migrateDb() {
 	fmt.Println("Migration done!")
 }
 
-// main is the entry point of the 3x-ui application.
+// main is the entry point of the OpenUI application.
 // It parses command-line arguments to run the web server, migrate database, or update settings.
 func main() {
 	if len(os.Args) < 2 {
@@ -457,7 +457,7 @@ func main() {
 		fmt.Println()
 		fmt.Println("Commands:")
 		fmt.Println("    run            run web panel")
-		fmt.Println("    migrate        migrate form other/old x-ui")
+		fmt.Println("    migrate        migrate from other/old OpenUI")
 		fmt.Println("    setting        set settings")
 	}
 
