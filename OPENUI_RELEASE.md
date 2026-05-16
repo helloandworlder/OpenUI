@@ -31,7 +31,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/helloandworlder/OpenUI/main/in
 Install a specific tag:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/helloandworlder/OpenUI/main/install.sh) v3.0.1
+bash <(curl -Ls https://raw.githubusercontent.com/helloandworlder/OpenUI/main/install.sh) v3.0.2
 ```
 
 If the GitHub repository name changes, override it without editing the script:
